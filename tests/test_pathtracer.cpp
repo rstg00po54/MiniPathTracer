@@ -1,4 +1,8 @@
 #include "pathtracer.h"
+// Make assertions effective even in optimized Release CI builds.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <cmath>
 #include <iostream>
