@@ -13,7 +13,7 @@ No GPU shading tricks: every pixel launches rays into the scene, samples an area
 - BVH traversal over triangle geometry (including boxes)
 - Progressive sampling, CPU tile parallelism, deterministic per-pixel random seeds
 - ACES-inspired tonemapping and sRGB output; BMP/PPM image files
-- **Interactive SDL2 path-traced preview**: orbit/pan/zoom camera, adjustable light power and sampling quality, fast low-resolution updates during motion and progressive refinement when still (only enabled when SDL2 is installed)
+- **Interactive SDL2 path-traced preview**: orbit/pan/zoom camera, adjustable light position, light power and sampling quality, fast low-resolution updates during motion and progressive refinement when still (only enabled when SDL2 is installed)
 - Unit tests; standard CMake project on Windows / Linux
 
 **Not yet included:** ImGui controls, glass/metal BSDFs, OBJ import, importance-sampling MIS, GPU acceleration, denoising. The initial implementation supports **diffuse surfaces** and one rectangular area emitter. These are future steps, not present features.
@@ -33,6 +33,10 @@ cmake --build build --config Release -j
 # Opens the live preview window if SDL2 was available at build time
 ./build/MiniPathTracer --width 480 --height 480 --spp 128 --out cornell.bmp
 
+# Lamp can also be moved in headless renders (offsets in scene units):
+./build/MiniPathTracer --headless --width 320 --height 320 --spp 64 \
+  --light-x 0.35 --light-y -0.20 --light-z 0.25 --out moved_light.bmp
+
 # CPU-only, no window or external dependencies
 ./build/MiniPathTracer --headless --width 480 --height 480 --spp 128 --threads 8 --out cornell.bmp
 
@@ -45,7 +49,12 @@ Windows multi-config generators commonly put the executable at `build/Release/Mi
 **SDL2 live preview controls:**
 - **Left mouse drag:** orbit around the target; **mouse wheel:** zoom
 - **WASD:** move horizontally, **Q/E:** up/down, **R:** reset camera
+- **Arrow Left/Right:** move rectangular lamp horizontally (X)
+- **Arrow Up/Down:** move lamp toward rear/front wall (Z)
+- **Page Up/Page Down:** raise/lower the lamp (Y); constrained below the ceiling and above the tall box
+- **Home:** reset the lamp to its original position
 - **[ / ]:** adjust actual emitter power (restarts path tracing)
+- Moving the lamp updates its visible triangles, light sampling and BVH together; the window title displays its XYZ center.
 - **1 / 2 / 3:** set stationary quality to 16 / 64 / 256 samples per pixel
 - **+ / -:** exposure; **F12** or **Ctrl+S:** save the currently displayed BMP; **Esc:** close
 
