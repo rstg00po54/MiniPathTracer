@@ -1,0 +1,25 @@
+name: C++ build and tests
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMPT_ENABLE_SDL2=OFF
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Smoke render
+        run: ./build/MiniPathTracer --headless --width 64 --height 64 --spp 4 --out cornell.ppm
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DMPT_ENABLE_SDL2=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Tests
+        run: ctest --test-dir build --config Release --output-on-failure

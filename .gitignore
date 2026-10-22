@@ -1,0 +1,8 @@
+build/
+out/
+*.ppm
+*.png
+*.hdr
+.vscode/
+.idea/
+.DS_Store
