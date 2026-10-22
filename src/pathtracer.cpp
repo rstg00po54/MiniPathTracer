@@ -161,9 +161,22 @@ void Scene::build_cornell_box(){
     light_edge_u={0.56f,0,0}; light_edge_v={0,0,0.56f};
     light_area=length(cross(light_edge_u,light_edge_v));
     light_emission=materials[light].emission;
+    // Keep track of emitter triangles so position changes update both lighting
+    // samples and visible emissive geometry, instead of creating ghost lights.
+    light_first_triangle_=triangles.size();
     // Normals of emitter quads point downward (camera sees the emitter).
     quad(light_corner, light_corner+light_edge_u,
          light_corner+light_edge_u+light_edge_v,light_corner+light_edge_v,light);
+    build_bvh();
+}
+void Scene::translate_light(Vec3 offset) {
+    light_corner+=offset;
+    for(size_t i=light_first_triangle_; i<triangles.size(); ++i) {
+        triangles[i].a+=offset;
+        triangles[i].b+=offset;
+        triangles[i].c+=offset;
+        // Rigid translations do not change the normal, area or material.
+    }
     build_bvh();
 }
 int Scene::build_node(int start,int end){
@@ -286,6 +299,10 @@ void Renderer::render(const Settings& opt,Image& result,
     if(opt.width<=0||opt.height<=0||opt.samples<=0||opt.max_bounces<=0)throw std::invalid_argument("Invalid render settings");
     if(result.width!=opt.width||result.height!=opt.height)throw std::invalid_argument("Image dimensions mismatch");
     std::fill(result.linear.begin(),result.linear.end(),Vec3{});
+    // Work on a render-local copy: changing the emitter never races with the
+    // SDL input thread or any other render and keeps the base scene immutable.
+    Scene render_scene=scene_;
+    render_scene.translate_light(opt.light_offset);
     const unsigned int hw=std::thread::hardware_concurrency();
     int threads=opt.threads>0?opt.threads:static_cast<int>(hw?hw:4);
     threads=std::clamp(threads,1,64);
@@ -324,7 +341,7 @@ void Renderer::render(const Settings& opt,Image& result,
                                 float px=(2.0f*((x+rng.unit())/opt.width)-1.0f)*aspect*fov;
                                 float py=(1.0f-2.0f*((y+rng.unit())/opt.height))*fov;
                                 Ray ray{eye,normalize(forward+right*px+up*py)};
-                                Vec3 color=trace(scene_,ray,rng,opt.max_bounces,opt.light_scale);
+                                Vec3 color=trace(render_scene,ray,rng,opt.max_bounces,opt.light_scale);
                                 result.linear[index]+=(color-result.linear[index])/(sample+1.0f);
                             }
                         }
