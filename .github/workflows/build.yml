@@ -13,6 +13,20 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Smoke render
         run: ./build/MiniPathTracer --headless --width 64 --height 64 --spp 4 --out cornell.ppm
+  linux_sdl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDL2 development files
+        run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+      - name: Configure interactive preview
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DMPT_ENABLE_SDL2=ON | tee configure.log
+          grep -q "SDL2 preview enabled" configure.log
+      - name: Build SDL2 preview
+        run: cmake --build build --parallel 2
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
   windows:
     runs-on: windows-latest
     steps:
