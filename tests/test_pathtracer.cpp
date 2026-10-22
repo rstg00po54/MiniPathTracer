@@ -20,6 +20,18 @@ int main(){
     assert(ok && hit.t>0 && hit.material>=0);
     Hit miss;
     assert(!s.intersect({{0,3,3},{0,1,0}},0.0001f,1000,miss));
+    // The visible emitter and its BVH must move together with sampled light.
+    Scene shifted=s;
+    const Vec3 original=s.light_corner;
+    shifted.translate_light({0.2f,-0.2f,0.1f});
+    assert(std::abs(shifted.light_corner.x-original.x-0.2f)<1e-5f);
+    assert(std::abs(shifted.light_corner.y-original.y+0.2f)<1e-5f);
+    assert(std::abs(shifted.light_corner.z-original.z-0.1f)<1e-5f);
+    assert(std::abs(s.light_corner.x-original.x)<1e-5f);
+    Hit lamp_hit;
+    assert(shifted.intersect({{0.18f,1.7f,-0.28f},{0,1,0}},0.0001f,2.0f,lamp_hit));
+    assert(lamp_hit.material==3 && lamp_hit.t<0.2f);
+
     Settings opts;opts.width=16;opts.height=16;opts.samples=2;opts.max_bounces=5;opts.threads=2;
     Image image(16,16);
     Renderer renderer(s);
@@ -34,5 +46,14 @@ int main(){
     }
     assert(nonzero);
     assert(image.rgb8(1.0f).size()==16u*16u*3u);
+    opts.light_offset={0.2f,-0.2f,0.1f};
+    Image moved_light_image(16,16);
+    renderer.render(opts,moved_light_image);
+    float difference=0;
+    for(size_t i=0;i<image.linear.size();++i){
+        const Vec3 d=image.linear[i]-moved_light_image.linear[i];
+        difference+=std::abs(d.x)+std::abs(d.y)+std::abs(d.z);
+    }
+    assert(difference>0.01f);
     std::cout<<"All MiniPathTracer tests passed\n";
 }
