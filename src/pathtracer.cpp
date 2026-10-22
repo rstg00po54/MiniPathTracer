@@ -297,9 +297,13 @@ void Renderer::render(const Settings& opt,Image& result,
     const Vec3 up=normalize(cross(right,forward));
     const float fov=std::tan(opt.fov_degrees*pi/360.0f);
     const float aspect=static_cast<float>(opt.width)/opt.height;
+    // Process a short batch of samples per tile. Workers now start once per
+    // progressive update rather than once per sample (128 spp => 16 batches).
+    // Samples for each pixel stay in the same order, preserving results.
     const int passes_per_update=std::max(1,std::min(8,opt.samples/16));
-    for(int sample=0;sample<opt.samples;++sample){
+    for(int batch=0;batch<opt.samples;batch+=passes_per_update){
         if(stop&&stop->load())break;
+        const int sample_end=std::min(batch+passes_per_update,opt.samples);
         std::atomic<int> next{0};
         std::vector<std::thread> workers;
         workers.reserve(static_cast<size_t>(threads));
@@ -312,20 +316,22 @@ void Renderer::render(const Settings& opt,Image& result,
                     for(int y=ty;y<std::min(ty+tile,opt.height);++y){
                         for(int x=tx;x<std::min(tx+tile,opt.width);++x){
                             size_t index=static_cast<size_t>(y)*opt.width+x;
-                            Rng rng(opt.seed^((index+1)*0x9e3779b97f4a7c15ull)^((static_cast<uint64_t>(sample)+1)*0xbf58476d1ce4e5b9ull));
-                            float px=(2.0f*((x+rng.unit())/opt.width)-1.0f)*aspect*fov;
-                            float py=(1.0f-2.0f*((y+rng.unit())/opt.height))*fov;
-                            Ray ray{eye,normalize(forward+right*px+up*py)};
-                            Vec3 color=trace(scene_,ray,rng,opt.max_bounces);
-                            // Maintain running mean (no separate large accumulation buffer).
-                            result.linear[index]+=(color-result.linear[index])/(sample+1.0f);
+                            for(int sample=batch;sample<sample_end;++sample){
+                                Rng rng(opt.seed^((index+1)*0x9e3779b97f4a7c15ull)^((static_cast<uint64_t>(sample)+1)*0xbf58476d1ce4e5b9ull));
+                                float px=(2.0f*((x+rng.unit())/opt.width)-1.0f)*aspect*fov;
+                                float py=(1.0f-2.0f*((y+rng.unit())/opt.height))*fov;
+                                Ray ray{eye,normalize(forward+right*px+up*py)};
+                                Vec3 color=trace(scene_,ray,rng,opt.max_bounces);
+                                result.linear[index]+=(color-result.linear[index])/(sample+1.0f);
+                            }
                         }
                     }
                 }
             });
         }
         for(auto& t:workers)t.join();
-        if(on_pass&&((sample+1)%passes_per_update==0||sample+1==opt.samples))on_pass(sample+1,result);
+        if(stop&&stop->load())break;
+        if(on_pass)on_pass(sample_end,result);
     }
 }
 }
