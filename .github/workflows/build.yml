@@ -25,6 +25,13 @@ jobs:
           grep -q "SDL2 preview enabled" configure.log
       - name: Build SDL2 preview
         run: cmake --build build --parallel 2
+      - name: Test older SDL2 CMake config (no SDL2::SDL2 target)
+        run: |
+          mkdir -p fake-sdl2
+          printf 'set(SDL2_FOUND TRUE)\n' > fake-sdl2/SDL2Config.cmake
+          cmake -S . -B build_legacy -DCMAKE_BUILD_TYPE=Release -DMPT_ENABLE_SDL2=ON -DSDL2_DIR="$PWD/fake-sdl2" | tee legacy.log
+          grep -q "SDL2 preview enabled (pkg-config compatibility)" legacy.log
+          cmake --build build_legacy --parallel 2
       - name: Tests
         run: ctest --test-dir build --output-on-failure
   windows:
