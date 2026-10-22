@@ -4,6 +4,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Single-config generators (Unix Makefiles/Ninja) ignore --config Release.
+# Choose an optimized default unless the user explicitly requests Debug.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 # std::thread requires an explicit pthread dependency on older Linux/glibc.
 # FindThreads also handles the correct platform flags on macOS and Windows.
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
