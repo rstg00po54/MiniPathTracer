@@ -26,8 +26,8 @@ inline Vec3 operator*(float s, Vec3 v) { return v*s; }
 inline float dot(Vec3 a, Vec3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 inline Vec3 cross(Vec3 a, Vec3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
 inline float length2(Vec3 v) { return dot(v,v); }
-inline float length(Vec3 v);
-inline Vec3 normalize(Vec3 v);
+float length(Vec3 v);
+Vec3 normalize(Vec3 v);
 inline Vec3 clamp(Vec3 a, float lo, float hi) { return {std::clamp(a.x,lo,hi),std::clamp(a.y,lo,hi),std::clamp(a.z,lo,hi)}; }
 
 struct Ray { Vec3 origin, direction; };
@@ -75,6 +75,8 @@ public:
     Image(int w,int h);
     std::vector<uint8_t> rgb8(float exposure) const;
     bool save_ppm(const std::string& filename, float exposure) const;
+    bool save_bmp(const std::string& filename, float exposure) const;
+    bool save(const std::string& filename, float exposure) const;
 };
 
 class Renderer {
