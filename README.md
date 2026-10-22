@@ -12,7 +12,7 @@ No GPU shading tricks: every pixel launches rays into the scene, samples an area
 - Multi-bounce indirect illumination and color bleeding
 - BVH traversal over triangle geometry (including boxes)
 - Progressive sampling, CPU tile parallelism, deterministic per-pixel random seeds
-- ACES-inspired tonemapping and sRGB output; binary PPM image file
+- ACES-inspired tonemapping and sRGB output; BMP/PPM image files
 - **Optional SDL2 preview** (disabled automatically when SDL2 isn't installed)
 - Unit tests; standard CMake project on Windows / Linux
 
@@ -31,16 +31,16 @@ cmake --build build --config Release -j
 
 ```bash
 # Opens the live preview window if SDL2 was available at build time
-./build/MiniPathTracer --width 480 --height 480 --spp 128 --out cornell.ppm
+./build/MiniPathTracer --width 480 --height 480 --spp 128 --out cornell.bmp
 
 # CPU-only, no window or external dependencies
-./build/MiniPathTracer --headless --width 480 --height 480 --spp 128 --threads 8 --out cornell.ppm
+./build/MiniPathTracer --headless --width 480 --height 480 --spp 128 --threads 8 --out cornell.bmp
 
 # Very quick test
-./build/MiniPathTracer --headless --width 128 --height 128 --spp 8 --out quick.ppm
+./build/MiniPathTracer --headless --width 128 --height 128 --spp 8 --out quick.bmp
 ```
 
-Windows multi-config generators commonly put the executable at `build/Release/MiniPathTracer.exe`. The PPM is a standard image file: GIMP, ImageMagick, IrfanView, and many other viewers can open it. To convert with ImageMagick: `magick cornell.ppm cornell.png`.
+Windows multi-config generators commonly put the executable at `build/Release/MiniPathTracer.exe`. BMP files open directly in Windows Photos/Paint. You can still output a binary PPM by choosing a `.ppm` filename.
 
 **SDL2 preview keys:** `+`/`-` exposure, `S` save (after completion), `Esc` close. The final render is saved when the preview window closes after rendering. Closing during a render cancels it without writing a misleading partial output.
 
