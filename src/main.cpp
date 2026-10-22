@@ -7,6 +7,8 @@
 #include <iostream>
 #include <cmath>
 #include <memory>
+#include <iomanip>
+#include <sstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -26,10 +28,13 @@ void help(){
       <<"  --threads N     worker threads (0 = auto)\n"
       <<"  --exposure X    tone mapping exposure (default 1.0)\n"
       <<"  --seed N        deterministic random seed (default 42)\n"
+      <<"  --light-x X     area-light X offset in scene units (default 0)\n"
+      <<"  --light-y Y     area-light Y offset (down is negative)\n"
+      <<"  --light-z Z     area-light Z offset (default 0)\n"
       <<"  --out FILE      output image (BMP or PPM)\n"
       <<"  --headless      no SDL2 preview (always works)\n"
       <<"  --help          show this text\n\n"
-      <<"SDL2: drag orbit, WASD/QE move, wheel zoom, [ ] light, 1/2/3 quality, F12 save.\n";
+      <<"SDL2: drag orbit, WASD/QE camera; arrows move lamp X/Z, PgUp/PgDn lamp Y, Home reset lamp; [ ] brightness, F12 save.\n";
 }
 Cli parse(int argc,char** argv){
     Cli opt;
@@ -42,13 +47,17 @@ Cli parse(int argc,char** argv){
         else if(a=="--threads")opt.settings.threads=std::stoi(take(i));
         else if(a=="--exposure")opt.settings.exposure=std::stof(take(i));
         else if(a=="--seed")opt.settings.seed=std::stoull(take(i));
+        else if(a=="--light-x")opt.settings.light_offset.x=std::stof(take(i));
+        else if(a=="--light-y")opt.settings.light_offset.y=std::stof(take(i));
+        else if(a=="--light-z")opt.settings.light_offset.z=std::stof(take(i));
         else if(a=="--out")opt.out=take(i);
         else if(a=="--headless")opt.headless=true;
         else if(a=="--help"||a=="-h"){help();std::exit(0);}
         else throw std::invalid_argument("Unknown option: "+a);
     }
     auto& s=opt.settings;
-    if(s.width<1||s.height<1||s.width>4096||s.height>4096||s.samples<1||s.samples>100000||s.max_bounces<1||s.max_bounces>64||s.threads<0||s.threads>256||s.exposure<=0)
+    if(s.width<1||s.height<1||s.width>4096||s.height>4096||s.samples<1||s.samples>100000||s.max_bounces<1||s.max_bounces>64||s.threads<0||s.threads>256||s.exposure<=0||
+       !std::isfinite(s.light_offset.x)||!std::isfinite(s.light_offset.y)||!std::isfinite(s.light_offset.z))
         throw std::invalid_argument("Invalid settings (dimensions 1..4096, spp 1..100000, bounces 1..64, threads 0..256, exposure > 0)");
     return opt;
 }
@@ -83,6 +92,7 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
     float yaw=0.0f,pitch=0.0f,distance=3.35f;
     mpt::Vec3 focus{0,1,0};
     float light_scale=opt.settings.light_scale;
+    mpt::Vec3 light_offset=opt.settings.light_offset;
     int final_spp=opt.settings.samples;
     std::atomic<float> exposure{opt.settings.exposure};
     std::atomic<bool> cancel{false};
@@ -100,6 +110,7 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
         mpt::Settings settings=opt.settings;
         settings.samples=final_spp;
         settings.light_scale=light_scale;
+        settings.light_offset=light_offset;
         const float cp=std::cos(pitch);
         settings.camera_target=focus;
         settings.camera_position=focus+mpt::Vec3{
@@ -166,6 +177,7 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
                 if(k==SDLK_ESCAPE)running=false;
                 if(k==SDLK_F12 || (k==SDLK_s && (event.key.keysym.mod & KMOD_CTRL)))save_screenshot();
                 if(k==SDLK_r){yaw=0;pitch=0;distance=3.35f;focus={0,1,0};moved=true;}
+                if(k==SDLK_HOME){light_offset={0,0,0};moved=true;}
                 if(k==SDLK_LEFTBRACKET){light_scale=std::max(0.02f,light_scale/1.25f);moved=true;}
                 if(k==SDLK_RIGHTBRACKET){light_scale=std::min(20.f,light_scale*1.25f);moved=true;}
                 if(k==SDLK_1){final_spp=16;moved=true;}
@@ -188,6 +200,23 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
         if(keys[SDL_SCANCODE_D]){focus=focus+right*velocity;moved=true;}
         if(keys[SDL_SCANCODE_Q]){focus.y-=velocity;moved=true;}
         if(keys[SDL_SCANCODE_E]){focus.y+=velocity;moved=true;}
+        // Move the actual emitting quad, not only the point used for shadow sampling.
+        // Keep the 0.56x0.56 lamp inside the Cornell Box and above the tall box.
+        const float light_velocity=0.85f*dt;
+        mpt::Vec3 next_light=light_offset;
+        if(keys[SDL_SCANCODE_LEFT])next_light.x-=light_velocity;
+        if(keys[SDL_SCANCODE_RIGHT])next_light.x+=light_velocity;
+        if(keys[SDL_SCANCODE_UP])next_light.z-=light_velocity;
+        if(keys[SDL_SCANCODE_DOWN])next_light.z+=light_velocity;
+        if(keys[SDL_SCANCODE_PAGEUP])next_light.y+=light_velocity;
+        if(keys[SDL_SCANCODE_PAGEDOWN])next_light.y-=light_velocity;
+        next_light.x=std::clamp(next_light.x,-0.65f,0.65f);
+        next_light.y=std::clamp(next_light.y,-0.55f,0.0f);
+        next_light.z=std::clamp(next_light.z,-0.30f,1.10f);
+        if(mpt::length2(next_light-light_offset)>1e-12f){
+            light_offset=next_light;
+            moved=true;
+        }
         if(moved){dirty=true;last_interaction=now;}
         // While interacting, rapidly replace the preview at low resolution.
         // After 220 ms idle, switch to full-resolution progressive sampling.
@@ -215,10 +244,15 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
             current_rgb=std::move(received);
             rendered_spp=spp;
         }
+        const mpt::Vec3 light_center=mpt::Vec3{0,1.99f,-0.39f}+light_offset;
+        std::ostringstream lamp_status;
+        lamp_status<<std::fixed<<std::setprecision(2)
+                   <<light_center.x<<","<<light_center.y<<","<<light_center.z;
         std::string title="MiniPathTracer | "+std::to_string(rendered_spp)+" spp | "
             +std::to_string(tex_w)+"x"+std::to_string(tex_h)
-            +" | light "+std::to_string(static_cast<int>(light_scale*100))
-            +"% | drag orbit, WASD/QE move, wheel zoom, [ ] light, 1/2/3 quality, F12 save";
+            +" | lamp XYZ ("+lamp_status.str()+") "
+            +std::to_string(static_cast<int>(light_scale*100))
+            +"% | Arrows/PgUp/PgDn move lamp, Home resets, [ ] brightness, F12 save";
         SDL_SetWindowTitle(window,title.c_str());
         SDL_SetRenderDrawColor(display,15,18,20,255);
         SDL_RenderClear(display);
