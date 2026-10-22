@@ -75,7 +75,7 @@ Vec3 cosine_hemisphere(Vec3 n,Rng& rng){
     return normalize(t*(r*std::cos(angle))+b*(r*std::sin(angle))+n*std::sqrt(1-u));
 }
 float max_component(Vec3 c){return std::max({c.x,c.y,c.z});}
-Vec3 direct_light(const Scene& s,const Hit& hit,const Material& mat,Rng& rng) {
+Vec3 direct_light(const Scene& s,const Hit& hit,const Material& mat,Rng& rng,float light_scale) {
     Vec3 light_pos=s.light_corner+s.light_edge_u*rng.unit()+s.light_edge_v*rng.unit();
     Vec3 delta=light_pos-hit.position;
     float distance2=length2(delta);
@@ -88,9 +88,9 @@ Vec3 direct_light(const Scene& s,const Hit& hit,const Material& mat,Rng& rng) {
     if(cos_surface<=0||cos_light<=0)return {};
     Ray shadow{hit.position+hit.normal*eps,wi};
     if(s.occluded(shadow,eps,distance-2*eps))return {};
-    return mat.albedo * s.light_emission * ((cos_surface*cos_light*s.light_area)/(pi*distance2));
+    return mat.albedo * s.light_emission * (light_scale*(cos_surface*cos_light*s.light_area)/(pi*distance2));
 }
-Vec3 trace(const Scene& s,Ray ray,Rng& rng,int bounces){
+Vec3 trace(const Scene& s,Ray ray,Rng& rng,int bounces,float light_scale){
     Vec3 radiance{},throughput{1,1,1};
     for(int bounce=0;bounce<bounces;++bounce){
         Hit hit;
@@ -99,10 +99,10 @@ Vec3 trace(const Scene& s,Ray ray,Rng& rng,int bounces){
         // All indirect paths use next-event estimation; adding emission at every
         // diffuse hit would double-count the area light sampled below.
         if(max_component(m.emission)>0) {
-            if(bounce==0) radiance+=throughput*m.emission;
+            if(bounce==0) radiance+=throughput*m.emission*light_scale;
             break;
         }
-        radiance+=throughput*direct_light(s,hit,m,rng);
+        radiance+=throughput*direct_light(s,hit,m,rng,light_scale);
         throughput=throughput*m.albedo;
         if(bounce>=3){
             const float survive=std::clamp(max_component(throughput),0.1f,0.95f);
@@ -292,8 +292,8 @@ void Renderer::render(const Settings& opt,Image& result,
     const int tile=16;
     const int tiles_x=(opt.width+tile-1)/tile,tiles_y=(opt.height+tile-1)/tile;
     const int jobs=tiles_x*tiles_y;
-    const Vec3 eye{0,1.0f,3.35f},target{0,1.0f,0};
-    const Vec3 forward=normalize(target-eye),right=normalize(cross(forward,{0,1,0}));
+    const Vec3 eye=opt.camera_position,target=opt.camera_target;
+    const Vec3 forward=normalize(target-eye),right=normalize(cross(forward,opt.camera_up));
     const Vec3 up=normalize(cross(right,forward));
     const float fov=std::tan(opt.fov_degrees*pi/360.0f);
     const float aspect=static_cast<float>(opt.width)/opt.height;
@@ -301,9 +301,11 @@ void Renderer::render(const Settings& opt,Image& result,
     // progressive update rather than once per sample (128 spp => 16 batches).
     // Samples for each pixel stay in the same order, preserving results.
     const int passes_per_update=std::max(1,std::min(8,opt.samples/16));
-    for(int batch=0;batch<opt.samples;batch+=passes_per_update){
+    for(int batch=0;batch<opt.samples;){
+        // Publish the first sample immediately, then process larger batches.
+        const int batch_count=(batch==0 && on_pass)?1:passes_per_update;
         if(stop&&stop->load())break;
-        const int sample_end=std::min(batch+passes_per_update,opt.samples);
+        const int sample_end=std::min(batch+batch_count,opt.samples);
         std::atomic<int> next{0};
         std::vector<std::thread> workers;
         workers.reserve(static_cast<size_t>(threads));
@@ -314,6 +316,7 @@ void Renderer::render(const Settings& opt,Image& result,
                     if(stop&&stop->load())break;
                     int tx=(job%tiles_x)*tile,ty=(job/tiles_x)*tile;
                     for(int y=ty;y<std::min(ty+tile,opt.height);++y){
+                        if(stop&&stop->load())return;
                         for(int x=tx;x<std::min(tx+tile,opt.width);++x){
                             size_t index=static_cast<size_t>(y)*opt.width+x;
                             for(int sample=batch;sample<sample_end;++sample){
@@ -321,7 +324,7 @@ void Renderer::render(const Settings& opt,Image& result,
                                 float px=(2.0f*((x+rng.unit())/opt.width)-1.0f)*aspect*fov;
                                 float py=(1.0f-2.0f*((y+rng.unit())/opt.height))*fov;
                                 Ray ray{eye,normalize(forward+right*px+up*py)};
-                                Vec3 color=trace(scene_,ray,rng,opt.max_bounces);
+                                Vec3 color=trace(scene_,ray,rng,opt.max_bounces,opt.light_scale);
                                 result.linear[index]+=(color-result.linear[index])/(sample+1.0f);
                             }
                         }
@@ -332,6 +335,7 @@ void Renderer::render(const Settings& opt,Image& result,
         for(auto& t:workers)t.join();
         if(stop&&stop->load())break;
         if(on_pass)on_pass(sample_end,result);
+        batch=sample_end;
     }
 }
 }
