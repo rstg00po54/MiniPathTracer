@@ -248,6 +248,37 @@ bool Image::save_ppm(const std::string& filename,float exposure)const{
     f.write(reinterpret_cast<const char*>(pixels.data()),static_cast<std::streamsize>(pixels.size()));
     return static_cast<bool>(f);
 }
+bool Image::save_bmp(const std::string& filename,float exposure)const{
+    std::ofstream f(filename,std::ios::binary);
+    if(!f)return false;
+    const uint32_t stride=static_cast<uint32_t>((width*3+3)&~3);
+    const uint32_t bytes=stride*static_cast<uint32_t>(height);
+    auto w16=[&](uint16_t v){f.put(static_cast<char>(v&255));f.put(static_cast<char>(v>>8));};
+    auto w32=[&](uint32_t v){for(int i=0;i<4;i++)f.put(static_cast<char>((v>>(8*i))&255));};
+    f.write("BM",2);w32(54+bytes);w32(0);w32(54); // BMP file header
+    w32(40);w32(static_cast<uint32_t>(width));w32(static_cast<uint32_t>(height));
+    w16(1);w16(24);w32(0);w32(bytes);w32(2835);w32(2835);w32(0);w32(0);
+    auto pixels=rgb8(exposure);
+    const uint8_t zero[3]={0,0,0};
+    for(int y=height-1;y>=0;y--){
+        for(int x=0;x<width;x++){
+            size_t i=(static_cast<size_t>(y)*width+x)*3;
+            const char bgr[]={static_cast<char>(pixels[i+2]),static_cast<char>(pixels[i+1]),static_cast<char>(pixels[i])};
+            f.write(bgr,3);
+        }
+        f.write(reinterpret_cast<const char*>(zero),stride-static_cast<uint32_t>(width*3));
+    }
+    return static_cast<bool>(f);
+}
+bool Image::save(const std::string& filename,float exposure)const{
+    const auto ext=filename.find_last_of('.');
+    if(ext!=std::string::npos){
+        std::string suffix=filename.substr(ext);
+        for(auto& c:suffix)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');
+        if(suffix==".bmp")return save_bmp(filename,exposure);
+    }
+    return save_ppm(filename,exposure);
+}
 Renderer::Renderer(Scene scene):scene_(std::move(scene)){}
 void Renderer::render(const Settings& opt,Image& result,
                       const std::function<void(int,const Image&)>& on_pass,
