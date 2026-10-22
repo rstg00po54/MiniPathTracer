@@ -14,7 +14,7 @@
 #endif
 
 namespace {
-struct Cli { mpt::Settings settings; std::string out="cornell.ppm"; bool headless=false; };
+struct Cli { mpt::Settings settings; std::string out="cornell.bmp"; bool headless=false; };
 void help(){
     std::cout<<"MiniPathTracer - progressive CPU Cornell Box path tracer\n"
       <<"  --width N       image width (default 480)\n"
@@ -24,7 +24,7 @@ void help(){
       <<"  --threads N     worker threads (0 = auto)\n"
       <<"  --exposure X    tone mapping exposure (default 1.0)\n"
       <<"  --seed N        deterministic random seed (default 42)\n"
-      <<"  --out FILE      output image (binary PPM)\n"
+      <<"  --out FILE      output image (BMP or PPM)\n"
       <<"  --headless      no SDL2 preview (always works)\n"
       <<"  --help          show this text\n\n"
       <<"SDL2 preview: +/- exposure; S save; Esc close.\n";
@@ -60,7 +60,7 @@ void headless(mpt::Renderer& renderer,const Cli& opt){
     mpt::Image image(opt.settings.width,opt.settings.height);
     auto start=std::chrono::steady_clock::now();
     renderer.render(opt.settings,image,[&](int sample,const mpt::Image&){log_pass(sample,opt.settings,start);});
-    if(!image.save_ppm(opt.out,opt.settings.exposure))throw std::runtime_error("Could not save "+opt.out);
+    if(!image.save(opt.out,opt.settings.exposure))throw std::runtime_error("Could not save "+opt.out);
     std::cout<<"Saved "<<opt.out<<"\n";
 }
 #ifdef MPT_WITH_SDL2
@@ -99,7 +99,7 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
             if(event.type==SDL_KEYDOWN){
                 if(event.key.keysym.sym==SDLK_ESCAPE)running=false;
                 if(event.key.keysym.sym==SDLK_s && done.load()){
-                    if(image.save_ppm(opt.out,exposure.load()))std::cout<<"Saved "<<opt.out<<"\n";
+                    if(image.save(opt.out,exposure.load()))std::cout<<"Saved "<<opt.out<<"\n";
                 }
                 if(event.key.keysym.sym==SDLK_EQUALS||event.key.keysym.sym==SDLK_PLUS||event.key.keysym.sym==SDLK_KP_PLUS){
                     exposure.store(exposure.load()*1.2f);dirty=true;
@@ -132,7 +132,7 @@ void preview(mpt::Renderer& renderer,const Cli& opt){
     }
     stop=true;
     worker.join();
-    if(done.load()&&!image.save_ppm(opt.out,exposure.load()))std::cerr<<"Warning: failed to save "<<opt.out<<"\n";
+    if(done.load()&&!image.save(opt.out,exposure.load()))std::cerr<<"Warning: failed to save "<<opt.out<<"\n";
     else if(done.load())std::cout<<"Saved "<<opt.out<<"\n";
     SDL_DestroyTexture(texture);SDL_DestroyRenderer(display);SDL_DestroyWindow(window);SDL_Quit();
 }
