@@ -4,8 +4,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# std::thread requires an explicit pthread dependency on older Linux/glibc.
+# FindThreads also handles the correct platform flags on macOS and Windows.
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+find_package(Threads REQUIRED)
+
 add_library(mpt_core src/pathtracer.cpp)
 target_include_directories(mpt_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(mpt_core PUBLIC Threads::Threads)
 if(MSVC)
   target_compile_options(mpt_core PRIVATE /W4)
 else()
@@ -36,7 +42,7 @@ if(MPT_ENABLE_SDL2)
     target_compile_definitions(MiniPathTracer PRIVATE MPT_WITH_SDL2=1)
     message(STATUS "SDL2 preview enabled (pkg-config)")
   else()
-    message(STATUS "SDL2 not found: building headless renderer (PPM output)")
+    message(STATUS "SDL2 not found: building headless renderer (PPM/BMP output)")
   endif()
 endif()
 
