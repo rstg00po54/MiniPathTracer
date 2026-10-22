@@ -51,11 +51,14 @@ public:
     float light_area = 0;
 
     void build_cornell_box();
+    // Move the rectangular emitter (including visible geometry), then rebuild its BVH.
+    void translate_light(Vec3 offset);
     bool intersect(const Ray& ray, float near_t, float far_t, Hit& result) const;
     bool occluded(const Ray& ray, float near_t, float far_t) const;
     void build_bvh();
     size_t bvh_node_count() const { return nodes_.size(); }
 private:
+    size_t light_first_triangle_ = 0;
     std::vector<BvhNode> nodes_;
     std::vector<int> order_;
     int build_node(int start,int end);
@@ -67,6 +70,7 @@ struct Settings {
     int width=480, height=480, samples=128, max_bounces=8, threads=0;
     float fov_degrees=40.0f, exposure=1.0f, light_scale=1.0f;
     Vec3 camera_position{0,1.0f,3.35f}, camera_target{0,1.0f,0}, camera_up{0,1,0};
+    Vec3 light_offset{0,0,0}; // emitter XYZ relative to initial Cornell Box position
     uint64_t seed=42;
 };
 class Image {
