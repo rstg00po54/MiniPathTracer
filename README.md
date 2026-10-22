@@ -13,7 +13,7 @@ No GPU shading tricks: every pixel launches rays into the scene, samples an area
 - BVH traversal over triangle geometry (including boxes)
 - Progressive sampling, CPU tile parallelism, deterministic per-pixel random seeds
 - ACES-inspired tonemapping and sRGB output; BMP/PPM image files
-- **Optional SDL2 preview** (disabled automatically when SDL2 isn't installed)
+- **Interactive SDL2 path-traced preview**: orbit/pan/zoom camera, adjustable light power and sampling quality, fast low-resolution updates during motion and progressive refinement when still (only enabled when SDL2 is installed)
 - Unit tests; standard CMake project on Windows / Linux
 
 **Not yet included:** ImGui controls, glass/metal BSDFs, OBJ import, importance-sampling MIS, GPU acceleration, denoising. The initial implementation supports **diffuse surfaces** and one rectangular area emitter. These are future steps, not present features.
@@ -42,7 +42,23 @@ cmake --build build --config Release -j
 
 Windows multi-config generators commonly put the executable at `build/Release/MiniPathTracer.exe`. BMP files open directly in Windows Photos/Paint. You can still output a binary PPM by choosing a `.ppm` filename.
 
-**SDL2 preview keys:** `+`/`-` exposure, `S` save (after completion), `Esc` close. The final render is saved when the preview window closes after rendering. Closing during a render cancels it without writing a misleading partial output.
+**SDL2 live preview controls:**
+- **Left mouse drag:** orbit around the target; **mouse wheel:** zoom
+- **WASD:** move horizontally, **Q/E:** up/down, **R:** reset camera
+- **[ / ]:** adjust actual emitter power (restarts path tracing)
+- **1 / 2 / 3:** set stationary quality to 16 / 64 / 256 samples per pixel
+- **+ / -:** exposure; **F12** or **Ctrl+S:** save the currently displayed BMP; **Esc:** close
+
+Movement triggers a fast 160-pixel-wide (maximum dimension), 1-sample preview; stopping for about 0.2 s switches back to full-resolution progressive accumulation. The first full-resolution sample is displayed immediately, then additional samples refine the image. **This is responsive CPU interaction, not guaranteed 60 FPS**: actual update rate depends on resolution, CPU, and whether the app runs inside a VM.
+
+Ubuntu: install SDL2 **before** configuring CMake:
+```bash
+sudo apt install libsdl2-dev
+cmake -S . -B build -DMPT_ENABLE_SDL2=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j8
+./build/MiniPathTracer --width 320 --height 320 --spp 32
+```
+CMake must print `SDL2 preview enabled`. If SDL2 is absent it silently falls back to headless, which only saves an image. `--headless` intentionally disables the window.
 
 ### Tests
 
