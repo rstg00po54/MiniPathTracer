@@ -65,7 +65,8 @@ private:
 
 struct Settings {
     int width=480, height=480, samples=128, max_bounces=8, threads=0;
-    float fov_degrees=40.0f, exposure=1.0f;
+    float fov_degrees=40.0f, exposure=1.0f, light_scale=1.0f;
+    Vec3 camera_position{0,1.0f,3.35f}, camera_target{0,1.0f,0}, camera_up{0,1,0};
     uint64_t seed=42;
 };
 class Image {
