@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <cmath>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -27,7 +29,7 @@ void help(){
       <<"  --out FILE      output image (BMP or PPM)\n"
       <<"  --headless      no SDL2 preview (always works)\n"
       <<"  --help          show this text\n\n"
-      <<"SDL2 preview: +/- exposure; S save; Esc close.\n";
+      <<"SDL2: drag orbit, WASD/QE move, wheel zoom, [ ] light, 1/2/3 quality, F12 save.\n";
 }
 Cli parse(int argc,char** argv){
     Cli opt;
@@ -66,76 +68,172 @@ void headless(mpt::Renderer& renderer,const Cli& opt){
 #ifdef MPT_WITH_SDL2
 void preview(mpt::Renderer& renderer,const Cli& opt){
     if(SDL_Init(SDL_INIT_VIDEO)!=0)throw std::runtime_error(SDL_GetError());
-    SDL_Window* window=SDL_CreateWindow("MiniPathTracer | Cornell Box", SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,
-       std::max(480,opt.settings.width),std::max(480,opt.settings.height),SDL_WINDOW_RESIZABLE);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
+    SDL_Window* window=SDL_CreateWindow("MiniPathTracer | interactive preview",
+        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,
+        std::max(480,opt.settings.width),std::max(480,opt.settings.height),SDL_WINDOW_RESIZABLE);
     if(!window){SDL_Quit();throw std::runtime_error(SDL_GetError());}
     SDL_Renderer* display=SDL_CreateRenderer(window,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
     if(!display) display=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
     if(!display){SDL_DestroyWindow(window);SDL_Quit();throw std::runtime_error(SDL_GetError());}
-    SDL_Texture* texture=SDL_CreateTexture(display,SDL_PIXELFORMAT_RGB24,SDL_TEXTUREACCESS_STREAMING,
-                                           opt.settings.width,opt.settings.height);
-    if(!texture){SDL_DestroyRenderer(display);SDL_DestroyWindow(window);SDL_Quit();throw std::runtime_error(SDL_GetError());}
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"1");
-    mpt::Image image(opt.settings.width,opt.settings.height);
-    std::atomic<bool> stop{false},done{false};
-    std::mutex mutex;
-    std::vector<uint8_t> latest;
-    int latest_samples=0;
+    SDL_Texture* texture=nullptr;
+    int tex_w=0,tex_h=0;
+    // The camera orbits around a movable target. No OpenGL lighting is involved:
+    // SDL only displays pixels computed by the path tracer on CPU threads.
+    float yaw=0.0f,pitch=0.0f,distance=3.35f;
+    mpt::Vec3 focus{0,1,0};
+    float light_scale=opt.settings.light_scale;
+    int final_spp=opt.settings.samples;
     std::atomic<float> exposure{opt.settings.exposure};
-    auto start=std::chrono::steady_clock::now();
-    std::thread worker([&]{
-        renderer.render(opt.settings,image,[&](int sample,const mpt::Image& image_ref){
-            auto pixels=image_ref.rgb8(exposure.load());
-            {std::lock_guard<std::mutex> guard(mutex);latest=std::move(pixels);latest_samples=sample;}
-            log_pass(sample,opt.settings,start);
-        },&stop);
-        done=true;
-    });
-    bool running=true,dirty=false;
+    std::atomic<bool> cancel{false};
+    std::thread job;
+    std::unique_ptr<mpt::Image> render_image;
+    std::mutex frame_mutex;
+    std::vector<uint8_t> pending_rgb,current_rgb;
+    int pending_w=0,pending_h=0,pending_spp=0;
+    int rendered_spp=0;
+    bool coarse_active=false;
+    auto start_render=[&](bool coarse){
+        cancel.store(true);
+        if(job.joinable())job.join();
+        cancel.store(false);
+        mpt::Settings settings=opt.settings;
+        settings.samples=final_spp;
+        settings.light_scale=light_scale;
+        const float cp=std::cos(pitch);
+        settings.camera_target=focus;
+        settings.camera_position=focus+mpt::Vec3{
+            distance*cp*std::sin(yaw),distance*std::sin(pitch),distance*cp*std::cos(yaw)};
+        if(coarse){
+            const int longer=std::max(settings.width,settings.height);
+            const float factor=std::min(1.0f,160.0f/static_cast<float>(longer));
+            settings.width=std::max(1,static_cast<int>(settings.width*factor));
+            settings.height=std::max(1,static_cast<int>(settings.height*factor));
+            settings.samples=1;
+            settings.max_bounces=std::min(settings.max_bounces,4);
+        }
+        coarse_active=coarse;
+        render_image.reset(new mpt::Image(settings.width,settings.height));
+        mpt::Image* target=render_image.get();
+        job=std::thread([&,settings,target]{
+            renderer.render(settings,*target,[&](int spp,const mpt::Image& image){
+                auto rgb=image.rgb8(exposure.load());
+                std::lock_guard<std::mutex> lock(frame_mutex);
+                pending_rgb=std::move(rgb);
+                pending_w=settings.width;
+                pending_h=settings.height;
+                pending_spp=spp;
+            },&cancel);
+        });
+    };
+    auto save_screenshot=[&]{
+        if(current_rgb.empty()){
+            std::cout<<"No completed preview frame to save yet.\n";
+            return;
+        }
+        SDL_Surface* surface=SDL_CreateRGBSurfaceWithFormatFrom(current_rgb.data(),
+             tex_w,tex_h,24,tex_w*3,SDL_PIXELFORMAT_RGB24);
+        if(!surface){std::cerr<<"Screenshot error: "<<SDL_GetError()<<"\n";return;}
+        // SDL_SaveBMP always writes BMP, irrespective of the provided extension.
+        std::string out=opt.out;
+        if(out.size()<4 || out.substr(out.size()-4)!=".bmp")out="cornell_live.bmp";
+        if(SDL_SaveBMP(surface,out.c_str())==0)std::cout<<"Saved "<<out<<"\n";
+        else std::cerr<<"Screenshot error: "<<SDL_GetError()<<"\n";
+        SDL_FreeSurface(surface);
+    };
+    Uint32 last_restart=SDL_GetTicks()-250;
+    Uint32 last_interaction=SDL_GetTicks();
+    Uint32 last_tick=SDL_GetTicks();
+    bool dirty=false,running=true;
+    start_render(true);
+    last_restart=SDL_GetTicks();
     while(running){
+        bool moved=false;
         SDL_Event event;
         while(SDL_PollEvent(&event)){
             if(event.type==SDL_QUIT)running=false;
-            if(event.type==SDL_KEYDOWN){
-                if(event.key.keysym.sym==SDLK_ESCAPE)running=false;
-                if(event.key.keysym.sym==SDLK_s && done.load()){
-                    if(image.save(opt.out,exposure.load()))std::cout<<"Saved "<<opt.out<<"\n";
-                }
-                if(event.key.keysym.sym==SDLK_EQUALS||event.key.keysym.sym==SDLK_PLUS||event.key.keysym.sym==SDLK_KP_PLUS){
-                    exposure.store(exposure.load()*1.2f);dirty=true;
-                }
-                if(event.key.keysym.sym==SDLK_MINUS||event.key.keysym.sym==SDLK_KP_MINUS){
-                    exposure.store(exposure.load()/1.2f);dirty=true;
-                }
+            if(event.type==SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_LMASK)){
+                yaw-=0.007f*event.motion.xrel;
+                pitch=std::clamp(pitch-0.007f*event.motion.yrel,-1.15f,1.15f);
+                moved=true;
+            }
+            if(event.type==SDL_MOUSEWHEEL){
+                distance=std::clamp(distance*std::pow(0.9f,static_cast<float>(event.wheel.y)),0.35f,15.0f);
+                moved=true;
+            }
+            if(event.type==SDL_KEYDOWN && event.key.repeat==0){
+                SDL_Keycode k=event.key.keysym.sym;
+                if(k==SDLK_ESCAPE)running=false;
+                if(k==SDLK_F12 || (k==SDLK_s && (event.key.keysym.mod & KMOD_CTRL)))save_screenshot();
+                if(k==SDLK_r){yaw=0;pitch=0;distance=3.35f;focus={0,1,0};moved=true;}
+                if(k==SDLK_LEFTBRACKET){light_scale=std::max(0.02f,light_scale/1.25f);moved=true;}
+                if(k==SDLK_RIGHTBRACKET){light_scale=std::min(20.f,light_scale*1.25f);moved=true;}
+                if(k==SDLK_1){final_spp=16;moved=true;}
+                if(k==SDLK_2){final_spp=64;moved=true;}
+                if(k==SDLK_3){final_spp=256;moved=true;}
+                if(k==SDLK_EQUALS || k==SDLK_PLUS || k==SDLK_KP_PLUS){exposure.store(exposure.load()*1.2f);moved=true;}
+                if(k==SDLK_MINUS || k==SDLK_KP_MINUS){exposure.store(exposure.load()/1.2f);moved=true;}
             }
         }
-        std::vector<uint8_t> frame;
-        int spp=0;
-        {std::lock_guard<std::mutex> guard(mutex);
-            if(latest_samples>0){frame.swap(latest);spp=latest_samples;latest_samples=0;}
+        Uint32 now=SDL_GetTicks();
+        float dt=std::min(0.05f,(now-last_tick)/1000.0f);
+        last_tick=now;
+        const Uint8* keys=SDL_GetKeyboardState(nullptr);
+        mpt::Vec3 dir{std::sin(yaw),0,std::cos(yaw)};
+        mpt::Vec3 right{std::cos(yaw),0,-std::sin(yaw)};
+        const float velocity=1.2f*dt;
+        if(keys[SDL_SCANCODE_W]){focus=focus-dir*velocity;moved=true;}
+        if(keys[SDL_SCANCODE_S] && !(SDL_GetModState()&KMOD_CTRL)){focus=focus+dir*velocity;moved=true;}
+        if(keys[SDL_SCANCODE_A]){focus=focus-right*velocity;moved=true;}
+        if(keys[SDL_SCANCODE_D]){focus=focus+right*velocity;moved=true;}
+        if(keys[SDL_SCANCODE_Q]){focus.y-=velocity;moved=true;}
+        if(keys[SDL_SCANCODE_E]){focus.y+=velocity;moved=true;}
+        if(moved){dirty=true;last_interaction=now;}
+        // While interacting, rapidly replace the preview at low resolution.
+        // After 220 ms idle, switch to full-resolution progressive sampling.
+        if(dirty && now-last_restart>=110){
+            start_render(true);dirty=false;last_restart=SDL_GetTicks();
+        }else if(!dirty && coarse_active && now-last_interaction>=220 && now-last_restart>=100){
+            start_render(false);last_restart=SDL_GetTicks();
         }
-        if(!frame.empty()){
-            SDL_UpdateTexture(texture,nullptr,frame.data(),opt.settings.width*3);
-            SDL_SetWindowTitle(window,("MiniPathTracer | Cornell Box | "+std::to_string(spp)+" / "+std::to_string(opt.settings.samples)+" spp").c_str());
+        std::vector<uint8_t> received;
+        int w=0,h=0,spp=0;
+        {
+            std::lock_guard<std::mutex> lock(frame_mutex);
+            if(!pending_rgb.empty()){
+                received.swap(pending_rgb);w=pending_w;h=pending_h;spp=pending_spp;
+            }
         }
-        // When exposure changes, rerender from the final completed buffer.
-        if(dirty&&done.load()){
-            frame=image.rgb8(exposure.load());
-            SDL_UpdateTexture(texture,nullptr,frame.data(),opt.settings.width*3);
-            dirty=false;
+        if(!received.empty()){
+            if(!texture || w!=tex_w || h!=tex_h){
+                if(texture)SDL_DestroyTexture(texture);
+                texture=SDL_CreateTexture(display,SDL_PIXELFORMAT_RGB24,SDL_TEXTUREACCESS_STREAMING,w,h);
+                if(!texture)throw std::runtime_error(SDL_GetError());
+                tex_w=w;tex_h=h;
+            }
+            SDL_UpdateTexture(texture,nullptr,received.data(),w*3);
+            current_rgb=std::move(received);
+            rendered_spp=spp;
         }
+        std::string title="MiniPathTracer | "+std::to_string(rendered_spp)+" spp | "
+            +std::to_string(tex_w)+"x"+std::to_string(tex_h)
+            +" | light "+std::to_string(static_cast<int>(light_scale*100))
+            +"% | drag orbit, WASD/QE move, wheel zoom, [ ] light, 1/2/3 quality, F12 save";
+        SDL_SetWindowTitle(window,title.c_str());
         SDL_SetRenderDrawColor(display,15,18,20,255);
         SDL_RenderClear(display);
-        SDL_RenderCopy(display,texture,nullptr,nullptr);
+        if(texture)SDL_RenderCopy(display,texture,nullptr,nullptr);
         SDL_RenderPresent(display);
-        SDL_Delay(10);
+        SDL_Delay(12);
     }
-    stop=true;
-    worker.join();
-    if(done.load()&&!image.save(opt.out,exposure.load()))std::cerr<<"Warning: failed to save "<<opt.out<<"\n";
-    else if(done.load())std::cout<<"Saved "<<opt.out<<"\n";
-    SDL_DestroyTexture(texture);SDL_DestroyRenderer(display);SDL_DestroyWindow(window);SDL_Quit();
+    cancel.store(true);
+    if(job.joinable())job.join();
+    if(texture)SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(display);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
 }
+
 #endif
 }
 int main(int argc,char** argv){
